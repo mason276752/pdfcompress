@@ -18,7 +18,7 @@
 工具都放在 `mason276752.github.io` 底下，屬於同一個 origin，可以用 [BroadcastChannel](https://developer.mozilla.org/docs/Web/API/BroadcastChannel) 互傳檔案：
 
 - ZIP 編輯器傳來的檔案（`{type:'files'}`）會直接加進清單開始壓縮
-- 這些檔案記得來源：壓好、之後改設定重壓，結果都會自動傳回（`{type:'update'}`），放在 ZIP 裡原檔旁邊、取代上一版（同一份結果連續修改時會防抖、節流：停手 0.8 秒才傳最新版，一直改也至少每 3 秒傳一次）；已經很精簡、保留原檔的不會傳
+- 這些檔案記得來源：壓好、之後改設定重壓，結果都會自動傳回（`{type:'update'}`），直接覆蓋 ZIP 裡的原檔（同一份結果連續修改時會防抖、節流：停手 0.8 秒才傳最新版，一直改也至少每 3 秒傳一次）；已經很精簡、保留原檔的不會傳
 - 這裡按「傳到 ZIP 編輯器」，把全部結果打包成 ZIP 傳過去（`{type:'zip'}`），可以合併到目前的資料夾（自己加進來的檔案用這個）
 
 對方的分頁沒開的話會自動開新分頁。協定見 [`src/bridge.js`](src/bridge.js)，與 zipeditor、paste2jpg 相同。
