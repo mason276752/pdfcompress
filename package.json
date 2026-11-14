@@ -1,0 +1,23 @@
+{
+  "name": "pdfcompress",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://mason276752.github.io/pdfcompress/",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "mupdf": "^1.28.6",
+    "vue": "^3.5.45"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "vite": "^6.4.6",
+    "vitest": "^3.2.7"
+  }
+}
