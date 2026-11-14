@@ -2,11 +2,11 @@
 // PDF 壓縮：MuPDF（WASM）在瀏覽器裡把 PDF 裡的圖片降到合理的解析度、重新壓縮，文字和向量不動。
 //   * 壓縮：在 Web Worker 裡跑，一次一個檔（見 pdf/）
 //   * 對照：壓縮前後同一頁並排，可以放大檢查畫質（見 components/Compare.vue）
-//   * 串接：ZIP 編輯器可以把 PDF 傳過來，結果打包成 ZIP 傳回去（見 bridge.js）
+//   * 串接：ZIP 編輯器可以把 PDF 傳過來，壓好（之後改設定重壓也是）自動傳回去；也能手動打包傳過去（見 bridge.js）
 import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import Icon from './components/Icon.vue'
 import Compare from './components/Compare.vue'
-import { bridgeSupported, listen, sendToEditor } from './bridge.js'
+import { bridgeSupported, listen, sendResult, sendToEditor, toolLabel } from './bridge.js'
 import { makeZip } from './zip.js'
 import { fmtBytes, saveBlob, timeStamp, uniqueName } from './util.js'
 import { cancelCompress, compress, forget } from './pdf/index.js'
@@ -55,16 +55,20 @@ const fileInput = ref(null)
 
 const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
 
-function addFiles(list, from) {
+// origins[i]：files[i] 從哪個工具來（見 bridge.js），壓好的結果會自動傳回去。
+function addFiles(list, from, origins = []) {
   const files = [...list]
-  const pdfs = files.filter(isPdf)
+  const picked = files.map((f, i) => [f, origins[i] ?? null]).filter(([f]) => isPdf(f))
+  const pdfs = picked.map(([f]) => f)
   if (!pdfs.length) {
     if (files.length) toast('沒有可以處理的 PDF')
     return
   }
-  const added = pdfs.map((f) => ({
+  const added = picked.map(([f, origin]) => ({
     id: crypto.randomUUID(),
     file: markRaw(f),
+    origin: origin && markRaw(origin), // 不要變成 Proxy：轉傳給別的工具時要能 postMessage
+    returned: '', // '' | 'ok' | 'failed'
     name: f.name || 'document.pdf',
     size: f.size,
     status: 'queued',
@@ -78,8 +82,9 @@ function addFiles(list, from) {
   items.value.push(...added)
   if (!selected.value) selectedId.value = added[0].id
   const skipped = files.length - pdfs.length
-  const who = from === 'zipeditor' ? '從 ZIP 編輯器收到' : '已加入'
-  toast(`${who} ${pdfs.length} 個 PDF${skipped ? `（略過 ${skipped} 個不是 PDF 的）` : ''}`)
+  const who = from ? `從${toolLabel(from)}收到` : '已加入'
+  const back = picked.find(([, o]) => o)?.[1]
+  toast(`${who} ${pdfs.length} 個 PDF${skipped ? `（略過 ${skipped} 個不是 PDF 的）` : ''}${back ? `，壓好會自動傳回${toolLabel(back.app)}` : ''}`)
   pump()
 }
 
@@ -128,6 +133,7 @@ async function process(item) {
   item.stage = ''
   item.progress = 0
   item.error = ''
+  item.returned = ''
   const opts = { dpi: settings.dpi, quality: settings.quality }
   try {
     const bytes = await item.file.arrayBuffer()
@@ -146,6 +152,7 @@ async function process(item) {
     dropResult(item)
     item.result = { blob: markRaw(blob), url: URL.createObjectURL(blob), pages: r.pages, stats: r.stats, repaired: r.repaired, opts, kept }
     item.status = 'done'
+    returnResult(item)
   } catch (err) {
     if (item.run !== run || !items.value.includes(item)) return
     if (err.code === 'password') {
@@ -213,12 +220,25 @@ const totalAfter = computed(() => doneItems.value.reduce((s, i) => s + i.result.
 // 上限 99%：省了 99.6% 也不該顯示成「−100%」，看起來像檔案不見了。
 const savedPct = (before, after) => Math.min(99, Math.max(0, Math.round((1 - after / before) * 100)))
 
+/** 從別的工具來的 PDF：壓好（改設定重壓也算）就傳回來源。保留原檔的不必傳，來源那份就是。 */
+async function returnResult(item) {
+  if (!item.origin || item.result.kept) return
+  const { blob } = item.result
+  const ok = await sendResult(item.origin, item.id, new File([blob], outName(item), { type: 'application/pdf' }))
+  if (item.result?.blob === blob) item.returned = ok ? 'ok' : 'failed'
+}
+
+const returnNote = (i) =>
+  !i.origin || !i.returned ? ''
+    : i.returned === 'ok' ? ` · 已傳回${toolLabel(i.origin.app)}`
+      : ` · ${toolLabel(i.origin.app)}已關閉，沒傳回`
+
 const STAGES = { load: '載入 PDF 引擎…', scan: '分析頁面…', images: '處理圖片…', save: '存檔中…' }
 const statusText = (i) =>
   i.status === 'queued' ? '等待中'
     : i.status === 'running' ? (STAGES[i.stage] || '準備中…')
       : i.status === 'done'
-        ? (i.result.kept ? `${fmtBytes(i.size)} · 已經很精簡，保留原檔` : `${fmtBytes(i.size)} → ${fmtBytes(i.result.blob.size)}`)
+        ? (i.result.kept ? `${fmtBytes(i.size)} · 已經很精簡，保留原檔` : `${fmtBytes(i.size)} → ${fmtBytes(i.result.blob.size)}${returnNote(i)}`)
         : i.error
 
 function statsText(item) {
@@ -291,7 +311,7 @@ onMounted(() => {
   window.addEventListener('dragleave', onDragLeave)
   window.addEventListener('drop', onDrop)
   window.addEventListener('beforeunload', onBeforeUnload)
-  stopListening = listen((files, from) => addFiles(files, from || 'zipeditor'))
+  stopListening = listen((files, from, origins) => addFiles(files, from || 'zipeditor', origins))
 })
 onBeforeUnmount(() => {
   window.removeEventListener('paste', onPaste)
